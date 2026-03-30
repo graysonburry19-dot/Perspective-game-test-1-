@@ -61,6 +61,7 @@
   let controls = new THREE.OrbitControls(camera, renderer.domElement);
 
   camera.position.set(4, 6, 10);
+  camera.lookAt(0, 0, 0);
   controls.update();
 
   let light = new THREE.DirectionalLight(0xffffff, 1);
