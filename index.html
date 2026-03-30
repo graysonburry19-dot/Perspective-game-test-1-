@@ -200,6 +200,14 @@
 
   createBaseGrid();
   animate();
+  // Quick test cube to make sure scene is visible
+let testCube = new THREE.Mesh(
+  new THREE.BoxGeometry(1,1,1),
+  new THREE.MeshBasicMaterial({ color: 0xff0000 }) // bright red
+);
+testCube.position.set(0, 0, 0); // center of the scene
+scene.add(testCube);
+  
 </script>
 
 </body>
