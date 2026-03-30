@@ -53,13 +53,14 @@
   let scene = new THREE.Scene();
   let camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
   let renderer = new THREE.WebGLRenderer({ antialias: true });
-
+  renderer.setClearColor(0x222222); // dark gray background
+  
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.body.appendChild(renderer.domElement);
 
   let controls = new THREE.OrbitControls(camera, renderer.domElement);
 
-  camera.position.set(5, 6, 8);
+  camera.position.set(4, 6, 10);
   controls.update();
 
   let light = new THREE.DirectionalLight(0xffffff, 1);
@@ -68,7 +69,10 @@
 
   let ambient = new THREE.AmbientLight(0xffffff, 0.5);
   scene.add(ambient);
-
+  
+  let gridHelper = new THREE.GridHelper(4, 4); // size 4, divisions 4
+  scene.add(gridHelper);
+  
   let raycaster = new THREE.Raycaster();
   let mouse = new THREE.Vector2();
 
