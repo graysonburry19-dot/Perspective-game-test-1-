@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D 4x4x4 Grid</title>
+
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #111;
+      color: white;
+      font-family: Arial;
+    }
+
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+    }
+
+    button {
+      margin: 3px;
+      padding: 8px;
+      border-radius: 6px;
+      border: none;
+      font-size: 14px;
+    }
+
+    #message {
+      margin-top: 5px;
+      color: orange;
+      height: 18px;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="ui">
+  <button onclick="undo()">Undo</button>
+  <button onclick="resetBoard()">Reset</button>
+  <button onclick="switchColor()">Switch Color</button>
+  <button onclick="toggleShading()">Toggle Shading</button>
+  <div id="message"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+  let scene = new THREE.Scene();
+  let camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+  let renderer = new THREE.WebGLRenderer({ antialias: true });
+
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  let controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+  camera.position.set(5, 6, 8);
+  controls.update();
+
+  let light = new THREE.DirectionalLight(0xffffff, 1);
+  light.position.set(5, 10, 7);
+  scene.add(light);
+
+  let ambient = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambient);
+
+  let raycaster = new THREE.Raycaster();
+  let mouse = new THREE.Vector2();
+
+  let board = Array(16).fill().map(() => []);
+  let cubes = [];
+  let history = [];
+  let currentColor = "blue";
+  let shading = true;
+
+  function createBaseGrid() {
+    for (let x = 0; x < 4; x++) {
+      for (let z = 0; z < 4; z++) {
+        let geometry = new THREE.PlaneGeometry(1,1);
+        let material = new THREE.MeshBasicMaterial({ color: 0x444444, side: THREE.DoubleSide });
+        let plane = new THREE.Mesh(geometry, material);
+
+        plane.rotation.x = -Math.PI/2;
+        plane.position.set(x - 1.5, 0, z - 1.5);
+        plane.userData.index = z*4 + x;
+
+        scene.add(plane);
+        cubes.push(plane);
+      }
+    }
+  }
+
+  function getMaterial(color) {
+    let col = color === "blue" ? 0x3498db : 0xe74c3c;
+
+    return shading
+      ? new THREE.MeshStandardMaterial({ color: col })
+      : new THREE.MeshBasicMaterial({ color: col });
+  }
+
+  function placeBlock(index) {
+    let column = board[index];
+
+    if (column.length >= 4) {
+      showMessage("Column full!");
+      return;
+    }
+
+    let x = index % 4;
+    let z = Math.floor(index / 4);
+    let y = column.length;
+
+    let cube = new THREE.Mesh(
+      new THREE.BoxGeometry(0.9,0.9,0.9),
+      getMaterial(currentColor)
+    );
+
+    cube.position.set(x - 1.5, y + 0.5, z - 1.5);
+
+    scene.add(cube);
+    column.push(cube);
+    history.push(index);
+
+    toggleColor();
+  }
+
+  function undo() {
+    if (history.length === 0) return;
+
+    let index = history.pop();
+    let cube = board[index].pop();
+
+    scene.remove(cube);
+    toggleColor();
+  }
+
+  function resetBoard() {
+    board.forEach(col => col.forEach(c => scene.remove(c)));
+    board = Array(16).fill().map(() => []);
+    history = [];
+    currentColor = "blue";
+    showMessage("Reset");
+  }
+
+  function switchColor() {
+    toggleColor();
+    showMessage("Switched color");
+  }
+
+  function toggleColor() {
+    currentColor = currentColor === "blue" ? "red" : "blue";
+  }
+
+  function toggleShading() {
+    shading = !shading;
+
+    board.forEach(col => {
+      col.forEach(cube => {
+        cube.material = getMaterial(
+          cube.material.color.getHex() === 0x3498db ? "blue" : "red"
+        );
+      });
+    });
+
+    showMessage("Shading: " + (shading ? "ON" : "OFF"));
+  }
+
+  function showMessage(msg) {
+    const m = document.getElementById("message");
+    m.innerText = msg;
+    setTimeout(() => m.innerText = "", 1500);
+  }
+
+  window.addEventListener("click", (event) => {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+    let intersects = raycaster.intersectObjects(cubes);
+
+    if (intersects.length > 0) {
+      placeBlock(intersects[0].object.userData.index);
+    }
+  });
+
+  function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+  }
+
+  createBaseGrid();
+  animate();
+</script>
+
+</body>
+</html>
