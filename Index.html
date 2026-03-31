@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>4x4 Cube Grid - Free Play Sandbox</title>
+<style>
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #d2b48c;
+    font-family: sans-serif;
+  }
+  canvas {
+    display: block;
+    cursor: grab;
+  }
+  #ui {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    background: rgba(255,255,255,0.28);
+    padding: 10px;
+    border-radius: 12px;
+    backdrop-filter: blur(4px);
+    min-width: 220px;
+  }
+  #status {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+  #selectedColorLabel {
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  button {
+    font-size: 15px;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    background: #f6f1e8;
+  }
+  button.active {
+    outline: 3px solid #333;
+  }
+  #winMessage {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 36px;
+    font-weight: bold;
+    color: red;
+    display: none;
+    z-index: 20;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  }
+  #hint {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.35;
+    opacity: 0.9;
+  }
+</style>
+</head>
+<body>
+  <div id="ui">
+    <div id="status">Free Play Mode</div>
+    <div id="selectedColorLabel">Selected: Blue</div>
+    <div class="row">
+      <button id="blueBtn" class="active">Blue</button>
+      <button id="orangeBtn">Orange</button>
+      <button id="undoBtn">Undo</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+    <div id="hint">Click a square to place the selected color. You can switch colors anytime.</div>
+  </div>
+  <div id="winMessage">Blue Wins!</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+  <script>
+    // -------------------------
+    // Scene setup
+    // -------------------------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xd2b48c);
+
+    const camera = new THREE.PerspectiveCamera(
+      60,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      100
+    );
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    document.body.appendChild(renderer.domElement);
+
+    const target = new THREE.Vector3(2, 0, 2);
+    let radius = 10;
+    let theta = Math.PI / 4;
+    let phi = Math.PI / 4;
+
+    function updateCamera() {
+      camera.position.x = target.x + radius * Math.sin(phi) * Math.cos(theta);
+      camera.position.y = target.y + radius * Math.cos(phi);
+      camera.position.z = target.z + radius * Math.sin(phi) * Math.sin(theta);
+      camera.lookAt(target);
+    }
+    updateCamera();
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // -------------------------
+    // Grid
+    // -------------------------
+    const gridSize = 4;
+    for (let i = 0; i <= gridSize; i++) {
+      scene.add(
+        new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(i, 0, 0),
+            new THREE.Vector3(i, 0, gridSize)
+          ]),
+          new THREE.LineBasicMaterial({ color: 0xffffff })
+        )
+      );
+
+      scene.add(
+        new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0, i),
+            new THREE.Vector3(gridSize, 0, i)
+          ]),
+          new THREE.LineBasicMaterial({ color: 0xffffff })
+        )
+      );
+    }
+
+    // -------------------------
+    // Game state
+    // -------------------------
+    const BLUE = 0x0000ff;
+    const ORANGE = 0xffa500;
+    const cubeColors = [BLUE, ORANGE];
+
+    const heights = Array.from({ length: 4 }, () => Array(4).fill(0));
+    const stacks = Array.from({ length: 4 }, () =>
+      Array.from({ length: 4 }, () => [])
+    );
+
+    const cubes = [];
+    const moveHistory = [];
+
+    let selectedColor = BLUE;
+    let gameWon = false;
+    let previewCube = null;
+
+    const status = document.getElementById('status');
+    const selectedColorLabel = document.getElementById('selectedColorLabel');
+    const winMessage = document.getElementById('winMessage');
+    const blueBtn = document.getElementById('blueBtn');
+    const orangeBtn = document.getElementById('orangeBtn');
+
+    function colorName(hex) {
+      return hex === BLUE ? 'Blue' : 'Orange';
+    }
+
+    function updateSelectedUI() {
+      selectedColorLabel.textContent = `Selected: ${colorName(selectedColor)}`;
+      blueBtn.classList.toggle('active', selectedColor === BLUE);
+      orangeBtn.classList.toggle('active', selectedColor === ORANGE);
+      status.textContent = gameWon ? 'Game Over' : 'Free Play Mode';
+    }
+
+    function darkenColor(hex, factor = 0.4) {
+      const r = (((hex >> 16) & 0xff) * factor) | 0;
+      const g = (((hex >> 8) & 0xff) * factor) | 0;
+      const b = ((hex & 0xff) * factor) | 0;
+      return (r << 16) + (g << 8) + b;
+    }
+
+    // -------------------------
+    // Board projection / win checking
+    // -------------------------
+    function projectGridColor() {
+      const grid3D = Array.from({ length: 4 }, () =>
+        Array.from({ length: 4 }, () => Array(4).fill(0))
+      );
+
+      for (let x = 0; x < 4; x++) {
+        for (let z = 0; z < 4; z++) {
+          for (let y = 0; y < stacks[x][z].length; y++) {
+            grid3D[x][y][z] = stacks[x][z][y];
+          }
+        }
+      }
+      return grid3D;
+    }
+
+    function getProjections(grid) {
+      const projections = [];
+
+      const topDown = Array.from({ length: 4 }, () => Array(4).fill(0));
+      for (let x = 0; x < 4; x++) {
+        for (let z = 0; z < 4; z++) {
+          for (let y = 3; y >= 0; y--) {
+            if (grid[x][y][z]) {
+              topDown[x][z] = grid[x][y][z];
+              break;
+            }
+          }
+        }
+      }
+      projections.push(topDown);
+
+      const front = Array.from({ length: 4 }, () => Array(4).fill(0));
+      for (let x = 0; x < 4; x++) {
+        for (let y = 0; y < 4; y++) {
+          for (let z = 0; z < 4; z++) {
+            if (grid[x][y][z]) {
+              front[x][y] = grid[x][y][z];
+              break;
+            }
+          }
+        }
+      }
+      projections.push(front);
+
+      const back = Array.from({ length: 4 }, () => Array(4).fill(0));
+      for (let x = 0; x < 4; x++) {
+        for (let y = 0; y < 4; y++) {
+          for (let z = 3; z >= 0; z--) {
+            if (grid[x][y][z]) {
+              back[x][y] = grid[x][y][z];
+              break;
+            }
+          }
+        }
+      }
+      projections.push(back);
+
+      const left = Array.from({ length: 4 }, () => Array(4).fill(0));
+      for (let z = 0; z < 4; z++) {
+        for (let y = 0; y < 4; y++) {
+          for (let x = 0; x < 4; x++) {
+            if (grid[x][y][z]) {
+              left[z][y] = grid[x][y][z];
+              break;
+            }
+          }
+        }
+      }
+      projections.push(left);
+
+      const right = Array.from({ length: 4 }, () => Array(4).fill(0));
+      for (let z = 0; z < 4; z++) {
+        for (let y = 0; y < 4; y++) {
+          for (let x = 3; x >= 0; x--) {
+            if (grid[x][y][z]) {
+              right[z][y] = grid[x][y][z];
+              break;
+            }
+          }
+        }
+      }
+      projections.push(right);
+
+      return projections;
+    }
+
+    function check4Color(arr) {
+      for (let i = 0; i < 4; i++) {
+        if (arr[i][0] && arr[i].every(c => c === arr[i][0])) return arr[i][0];
+        if ([0, 1, 2, 3].every(j => arr[j][i] && arr[j][i] === arr[0][i])) return arr[0][i];
+      }
+      if (arr[0][0] && [0, 1, 2, 3].every(k => arr[k][k] === arr[0][0])) return arr[0][0];
+      if (arr[0][3] && [0, 1, 2, 3].every(k => arr[k][3 - k] === arr[0][3])) return arr[0][3];
+      return null;
+    }
+
+    function winnerFromGrid(grid) {
+      const projections = getProjections(grid);
+      for (const proj of projections) {
+        const winner = check4Color(proj);
+        if (winner) return winner;
+      }
+      return null;
+    }
+
+    function checkWin() {
+      const winner = winnerFromGrid(projectGridColor());
+      if (!winner) return false;
+
+      gameWon = true;
+      winMessage.style.display = 'block';
+      winMessage.textContent = winner === BLUE ? 'Blue Wins!' : 'Orange Wins!';
+      status.textContent = 'Game Over';
+
+      const startColor = new THREE.Color(scene.background);
+      const endColor = new THREE.Color(winner);
+      let progress = 0;
+
+      function animateTint() {
+        if (progress < 1) {
+          progress += 0.02;
+          scene.background = startColor.clone().lerp(endColor, progress);
+          requestAnimationFrame(animateTint);
+        } else {
+          scene.background = endColor;
+        }
+      }
+      animateTint();
+      return true;
+    }
+
+    // -------------------------
+    // Piece placement / removal
+    // -------------------------
+    function placePiece(x, z, color, recordHistory = true) {
+      if (gameWon) return null;
+      if (x < 0 || x >= 4 || z < 0 || z >= 4) return null;
+      if (heights[x][z] >= 4) return null;
+
+      const y = heights[x][z];
+      heights[x][z]++;
+      stacks[x][z].push(color);
+
+      const cube = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshStandardMaterial({ color })
+      );
+      cube.position.set(x + 0.5, y + 0.5, z + 0.5);
+      scene.add(cube);
+
+      const borderGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.02, 1.02, 1.02));
+      const border = new THREE.LineSegments(
+        borderGeo,
+        new THREE.LineBasicMaterial({ color: darkenColor(color, 0.35) })
+      );
+      border.position.copy(cube.position);
+      scene.add(border);
+
+      const move = { x, z, y, color, mesh: cube, border };
+      cubes.push(cube);
+      if (recordHistory) moveHistory.push(move);
+
+      return move;
+    }
+
+    function removeMove(move) {
+      scene.remove(move.border);
+      scene.remove(move.mesh);
+      const idx = cubes.indexOf(move.mesh);
+      if (idx !== -1) cubes.splice(idx, 1);
+      stacks[move.x][move.z].pop();
+      heights[move.x][move.z]--;
+    }
+
+    // -------------------------
+    // UI controls
+    // -------------------------
+    blueBtn.addEventListener('click', () => {
+      selectedColor = BLUE;
+      updateSelectedUI();
+    });
+
+    orangeBtn.addEventListener('click', () => {
+      selectedColor = ORANGE;
+      updateSelectedUI();
+    });
+
+    document.getElementById('undoBtn').addEventListener('click', () => {
+      if (moveHistory.length === 0) return;
+
+      const last = moveHistory.pop();
+      removeMove(last);
+
+      gameWon = false;
+      winMessage.style.display = 'none';
+      scene.background = new THREE.Color(0xd2b48c);
+      updateSelectedUI();
+    });
+
+    function resetGame() {
+      while (moveHistory.length > 0) {
+        removeMove(moveHistory.pop());
+      }
+
+      cubes.length = 0;
+      for (let x = 0; x < 4; x++) {
+        for (let z = 0; z < 4; z++) {
+          heights[x][z] = 0;
+          stacks[x][z] = [];
+        }
+      }
+
+      if (previewCube) {
+        scene.remove(previewCube);
+        previewCube = null;
+      }
+
+      gameWon = false;
+      winMessage.style.display = 'none';
+      scene.background = new THREE.Color(0xd2b48c);
+      updateSelectedUI();
+    }
+
+    document.getElementById('resetBtn').addEventListener('click', resetGame);
+
+    // -------------------------
+    // Mouse click placement
+    // -------------------------
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(4, 4),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.set(2, 0, 2);
+    scene.add(plane);
+
+    window.addEventListener('pointerdown', e => {
+      if (gameWon) return;
+
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      let intersects = raycaster.intersectObjects(cubes);
+      let x, z;
+
+      if (intersects.length > 0) {
+        const p = intersects[0].object.position;
+        x = Math.floor(p.x);
+        z = Math.floor(p.z);
+      } else {
+        intersects = raycaster.intersectObject(plane);
+        if (intersects.length > 0) {
+          const p = intersects[0].point;
+          x = Math.floor(p.x);
+          z = Math.floor(p.z);
+        } else {
+          return;
+        }
+      }
+
+      placePiece(x, z, selectedColor, true);
+      checkWin();
+    });
+
+    // -------------------------
+    // Camera controls
+    // -------------------------
+    let isDragging = false;
+    let lastX = 0;
+    let lastY = 0;
+
+    window.addEventListener('mousedown', e => {
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      document.body.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mouseup', () => {
+      isDragging = false;
+      document.body.style.cursor = 'grab';
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (!isDragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      theta += dx * 0.005;
+      phi -= dy * 0.005;
+      phi = Math.max(0.1, Math.min(Math.PI - 0.1, phi));
+      updateCamera();
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    window.addEventListener('wheel', e => {
+      radius += e.deltaY * 0.01;
+      radius = Math.max(5, Math.min(20, radius));
+      updateCamera();
+    });
+
+    // -------------------------
+    // Render loop
+    // -------------------------
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    updateSelectedUI();
+  </script>
+</body>
+</html>
