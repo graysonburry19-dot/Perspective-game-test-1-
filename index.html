@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>4x4 Perspective Game</title>
+
+<style>
+body { margin:0; overflow:hidden; background:#d2b48c; font-family:sans-serif; touch-action:none; }
+#ui { position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.3); padding:10px; border-radius:10px; }
+button { font-size:16px; padding:8px; margin:4px; }
+#winText {
+  position:absolute; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  font-size:40px; font-weight:bold; display:none;
+}
+</style>
+</head>
+
+<body>
+
+<div id="ui">
+  <button id="modeBtn">Mode: VS AI</button>
+  <button id="undoBtn">Undo</button>
+  <button id="resetBtn">Reset</button>
+</div>
+
+<div id="winText"></div>
+
+<script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+
+<script>
+// ---------- Setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xd2b48c);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const target = new THREE.Vector3(2,0,2);
+let radius=10, theta=Math.PI/4, phi=Math.PI/4;
+
+function updateCamera(){
+  camera.position.set(
+    target.x + radius*Math.sin(phi)*Math.cos(theta),
+    target.y + radius*Math.cos(phi),
+    target.z + radius*Math.sin(phi)*Math.sin(theta)
+  );
+  camera.lookAt(target);
+}
+updateCamera();
+
+scene.add(new THREE.AmbientLight(0xffffff,0.8));
+const light=new THREE.DirectionalLight(0xffffff,0.6);
+light.position.set(10,10,10);
+scene.add(light);
+
+// Grid
+for(let i=0;i<=4;i++){
+  const mat=new THREE.LineBasicMaterial({color:0xffffff});
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(i,0,0),
+      new THREE.Vector3(i,0,4)
+    ]),mat
+  ));
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0,0,i),
+      new THREE.Vector3(4,0,i)
+    ]),mat
+  ));
+}
+
+// ---------- Game ----------
+const BLUE=1, ORANGE=2;
+let turn=BLUE, vsAI=true, gameOver=false;
+
+const heights=Array.from({length:4},()=>Array(4).fill(0));
+const stacks=Array.from({length:4},()=>Array.from({length:4},()=>[]));
+const cubes=[], history=[];
+
+const winText=document.getElementById("winText");
+
+// ---------- Place ----------
+function placePiece(x,z,color){
+  if(gameOver || heights[x][z]>=4) return false;
+
+  const y=heights[x][z]++;
+  stacks[x][z].push(color);
+
+  const cube=new THREE.Mesh(
+    new THREE.BoxGeometry(1,1,1),
+    new THREE.MeshStandardMaterial({color: color===BLUE?0x0000ff:0xffa500})
+  );
+
+  cube.position.set(x+0.5,y+0.5,z+0.5);
+  scene.add(cube);
+
+  cubes.push(cube);
+  history.push({x,z,cube});
+
+  const win=checkWin();
+  if(win){
+    gameOver=true;
+    winText.style.display="block";
+    winText.style.color=win===BLUE?"blue":"orange";
+    winText.textContent=win===BLUE?"Blue Wins!":"Orange Wins!";
+  }
+
+  return true;
+}
+
+// ---------- Build Grid ----------
+function buildGrid(){
+  const g=Array.from({length:4},()=>Array.from({length:4},()=>Array(4).fill(0)));
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++)
+      for(let y=0;y<stacks[x][z].length;y++)
+        g[x][y][z]=stacks[x][z][y];
+  return g;
+}
+
+// ---------- Check 2D Lines ----------
+function checkBoard(board){
+  const lines=[];
+
+  // rows
+  for(let i=0;i<4;i++) lines.push(board[i]);
+
+  // cols
+  for(let i=0;i<4;i++) lines.push([board[0][i],board[1][i],board[2][i],board[3][i]]);
+
+  // diagonals
+  lines.push([board[0][0],board[1][1],board[2][2],board[3][3]]);
+  lines.push([board[0][3],board[1][2],board[2][1],board[3][0]]);
+
+  for(const line of lines){
+    if(line[0] && line.every(v=>v===line[0])) return line[0];
+  }
+  return null;
+}
+
+// ---------- Check 3 Threat ----------
+function get3ThreatPositions(board,color){
+  const positions=[];
+  for(let i=0;i<4;i++){
+    const rows=[board[i], board.map(r=>r[i])];
+    for(const line of rows){
+      const count=line.filter(v=>v===color).length;
+      if(count===3){
+        for(let j=0;j<4;j++) if(line[j]===color) positions.push([i,j]);
+      }
+    }
+  }
+  // diagonals
+  const diag1=[board[0][0],board[1][1],board[2][2],board[3][3]];
+  const diag2=[board[0][3],board[1][2],board[2][1],board[3][0]];
+  [diag1,diag2].forEach((line,idx)=>{
+    if(line.filter(v=>v===color).length===3){
+      for(let k=0;k<4;k++){
+        if(line[k]===color){
+          positions.push(idx===0?[k,k]:[k,3-k]);
+        }
+      }
+    }
+  });
+  return positions;
+}
+
+// ---------- Projection ----------
+function getViews(){
+  const g=buildGrid();
+  const views=[];
+
+  function create(fn){
+    const b=Array.from({length:4},()=>Array(4).fill(0));
+    for(let x=0;x<4;x++)
+      for(let y=0;y<4;y++)
+        b[x][y]=fn(x,y,g);
+    return b;
+  }
+
+  // TOP
+  views.push(create((x,z,g)=>{
+    for(let y=3;y>=0;y--) if(g[x][y][z]) return g[x][y][z];
+    return 0;
+  }));
+
+  // FRONT
+  views.push(create((x,y,g)=>{
+    for(let z=0;z<4;z++) if(g[x][y][z]) return g[x][y][z];
+    return 0;
+  }));
+
+  // BACK
+  views.push(create((x,y,g)=>{
+    for(let z=3;z>=0;z--) if(g[x][y][z]) return g[x][y][z];
+    return 0;
+  }));
+
+  // LEFT
+  views.push(create((z,y,g)=>{
+    for(let x=0;x<4;x++) if(g[x][y][z]) return g[x][y][z];
+    return 0;
+  }));
+
+  // RIGHT
+  views.push(create((z,y,g)=>{
+    for(let x=3;x>=0;x--) if(g[x][y][z]) return g[x][y][z];
+    return 0;
+  }));
+
+  return views;
+}
+
+// ---------- Win ----------
+function checkWin(){
+  for(const v of getViews()){
+    const w=checkBoard(v);
+    if(w) return w;
+  }
+  return null;
+}
+
+// ---------- AI ----------
+function aiMove(){
+  const opp=BLUE;
+  const self=ORANGE;
+
+  // Try to win
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++){
+      if(heights[x][z]>=4) continue;
+      heights[x][z]++; stacks[x][z].push(self);
+      if(checkWin()){ heights[x][z]--; stacks[x][z].pop(); placePiece(x,z,self); return; }
+      heights[x][z]--; stacks[x][z].pop();
+    }
+
+  // Block opponent's win
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++){
+      if(heights[x][z]>=4) continue;
+      heights[x][z]++; stacks[x][z].push(opp);
+      if(checkWin()){ heights[x][z]--; stacks[x][z].pop(); placePiece(x,z,self); return; }
+      heights[x][z]--; stacks[x][z].pop();
+    }
+
+  // Block 3-in-a-row by stacking on one of the blocks
+  const views=getViews();
+  for(const view of views){
+    const positions=get3ThreatPositions(view,opp);
+    for(const pos of positions){
+      let x=pos[0], z=pos[1];
+      if(heights[x][z]<4){
+        placePiece(x,z,self);
+        return;
+      }
+    }
+  }
+
+  // Random
+  const moves=[];
+  for(let x=0;x<4;x++) for(let z=0;z<4;z++) if(heights[x][z]<4) moves.push([x,z]);
+  const [x,z]=moves[Math.floor(Math.random()*moves.length)];
+  placePiece(x,z,self);
+}
+
+// ---------- Controls ----------
+const raycaster=new THREE.Raycaster();
+const mouse=new THREE.Vector2();
+
+const plane=new THREE.Mesh(
+  new THREE.PlaneGeometry(4,4),
+  new THREE.MeshBasicMaterial({visible:false})
+);
+plane.rotation.x=-Math.PI/2;
+plane.position.set(2,0,2);
+scene.add(plane);
+
+let dragging=false, moved=false, lastX,lastY;
+
+window.addEventListener("pointerdown",e=>{
+  dragging=true; moved=false;
+  lastX=e.clientX; lastY=e.clientY;
+});
+
+window.addEventListener("pointermove",e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  if(Math.abs(dx)>3||Math.abs(dy)>3) moved=true;
+
+  theta+=dx*0.005;
+  phi-=dy*0.005;
+  phi=Math.max(0.1,Math.min(Math.PI-0.1,phi));
+  updateCamera();
+
+  lastX=e.clientX; lastY=e.clientY;
+});
+
+window.addEventListener("pointerup",e=>{
+  if(!moved && !gameOver){
+    mouse.x=(e.clientX/innerWidth)*2-1;
+    mouse.y=-(e.clientY/innerHeight)*2+1;
+
+    raycaster.setFromCamera(mouse,camera);
+
+    let hit=raycaster.intersectObjects(cubes);
+    let x,z;
+
+    if(hit.length){
+      const p=hit[0].object.position;
+      x=Math.floor(p.x); z=Math.floor(p.z);
+    } else {
+      hit=raycaster.intersectObject(plane);
+      if(!hit.length) return;
+      const p=hit[0].point;
+      x=Math.floor(p.x); z=Math.floor(p.z);
+    }
+
+    if(placePiece(x,z,turn)){
+      turn = turn===BLUE ? ORANGE : BLUE;
+      if(vsAI && turn===ORANGE){
+        setTimeout(()=>{
+          aiMove();
+          turn=BLUE;
+        },200);
+      }
+    }
+  }
+  dragging=false;
+});
+
+// ---------- Undo ----------
+document.getElementById("undoBtn").onclick=()=>{
+  if(history.length===0) return;
+  let count=vsAI?2:1;
+  while(count-- && history.length){
+    const m=history.pop();
+    scene.remove(m.cube);
+    heights[m.x][m.z]--;
+    stacks[m.x][m.z].pop();
+  }
+  gameOver=false;
+  winText.style.display="none";
+};
+
+// ---------- Mode ----------
+const modeBtn=document.getElementById("modeBtn");
+modeBtn.onclick=()=>{
+  vsAI=!vsAI;
+  modeBtn.textContent=vsAI?"Mode: VS AI":"Mode: 2 Player";
+};
+
+// ---------- Reset ----------
+document.getElementById("resetBtn").onclick=()=>{
+  while(history.length){
+    const m=history.pop();
+    scene.remove(m.cube);
+  }
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++){
+      heights[x][z]=0;
+      stacks[x][z]=[];
+    }
+  cubes.length=0;
+  gameOver=false;
+  turn=BLUE;
+  winText.style.display="none";
+};
+
+// ---------- Loop ----------
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene,camera);
+}
+animate();
+
+window.addEventListener("resize",()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+
+</body>
+</html>
