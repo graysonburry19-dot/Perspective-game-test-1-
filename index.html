@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>4x4x4 Game</title>
+
+<style>
+body {
+  margin: 0;
+  overflow: hidden;
+  background: #d2b48c;
+  font-family: sans-serif;
+  touch-action: none;
+}
+
+#ui {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(255,255,255,0.3);
+  padding: 10px;
+  border-radius: 10px;
+}
+
+button {
+  font-size: 16px;
+  padding: 8px;
+  margin: 4px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="ui">
+  <button id="resetBtn">Reset</button>
+</div>
+
+<script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+
+<script>
+// ---------- Setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xd2b48c);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0xd2b48c,1);
+document.body.appendChild(renderer.domElement);
+
+// Camera orbit
+const target = new THREE.Vector3(2,0,2);
+let radius = 10, theta = Math.PI/4, phi = Math.PI/4;
+
+function updateCamera(){
+  camera.position.x = target.x + radius*Math.sin(phi)*Math.cos(theta);
+  camera.position.y = target.y + radius*Math.cos(phi);
+  camera.position.z = target.z + radius*Math.sin(phi)*Math.sin(theta);
+  camera.lookAt(target);
+}
+updateCamera();
+
+// Lights
+scene.add(new THREE.AmbientLight(0xffffff,0.8));
+const light = new THREE.DirectionalLight(0xffffff,0.6);
+light.position.set(10,10,10);
+scene.add(light);
+
+// Grid
+for(let i=0;i<=4;i++){
+  const mat = new THREE.LineBasicMaterial({color:0xffffff});
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(i,0,0),
+      new THREE.Vector3(i,0,4)
+    ]),mat
+  ));
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0,0,i),
+      new THREE.Vector3(4,0,i)
+    ]),mat
+  ));
+}
+
+// ---------- Game ----------
+const BLUE = 0x0000ff;
+const ORANGE = 0xffa500;
+
+let turn = BLUE;
+let gameOver = false;
+
+const heights = Array.from({length:4},()=>Array(4).fill(0));
+const stacks = Array.from({length:4},()=>Array.from({length:4},()=>[]));
+const cubes = [];
+
+// Place piece
+function placePiece(x,z,color){
+  if(gameOver) return false;
+  if(heights[x][z] >= 4) return false;
+
+  const y = heights[x][z]++;
+  stacks[x][z].push(color);
+
+  const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(1,1,1),
+    new THREE.MeshStandardMaterial({color})
+  );
+
+  cube.position.set(x+0.5,y+0.5,z+0.5);
+  scene.add(cube);
+  cubes.push(cube);
+
+  const win = checkWin3D();
+  if(win){
+    alert(win===BLUE?"You win!":"AI wins!");
+    gameOver = true;
+  }
+
+  return true;
+}
+
+// ---------- Win Detection ----------
+function checkWin3D(){
+  const grid = Array.from({length:4},()=>Array.from({length:4},()=>Array(4).fill(0)));
+
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++)
+      for(let y=0;y<stacks[x][z].length;y++)
+        grid[x][y][z] = stacks[x][z][y];
+
+  const dirs = [
+    [1,0,0],[0,1,0],[0,0,1],
+    [1,1,0],[1,-1,0],[1,0,1],[1,0,-1],
+    [0,1,1],[0,1,-1],
+    [1,1,1],[1,1,-1],[1,-1,1],[1,-1,-1]
+  ];
+
+  for(let x=0;x<4;x++)
+    for(let y=0;y<4;y++)
+      for(let z=0;z<4;z++){
+        const start = grid[x][y][z];
+        if(!start) continue;
+
+        for(const [dx,dy,dz] of dirs){
+          let win=true;
+          for(let i=1;i<4;i++){
+            const nx=x+dx*i, ny=y+dy*i, nz=z+dz*i;
+            if(nx<0||ny<0||nz<0||nx>=4||ny>=4||nz>=4||grid[nx][ny][nz]!==start){
+              win=false; break;
+            }
+          }
+          if(win) return start;
+        }
+      }
+  return null;
+}
+
+// ---------- AI ----------
+function aiMove(){
+  // try win
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++){
+      if(heights[x][z]>=4) continue;
+      heights[x][z]++;
+      stacks[x][z].push(ORANGE);
+
+      if(checkWin3D()){
+        heights[x][z]--; stacks[x][z].pop();
+        placePiece(x,z,ORANGE);
+        return;
+      }
+
+      heights[x][z]--; stacks[x][z].pop();
+    }
+
+  // block player
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++){
+      if(heights[x][z]>=4) continue;
+      heights[x][z]++;
+      stacks[x][z].push(BLUE);
+
+      if(checkWin3D()){
+        heights[x][z]--; stacks[x][z].pop();
+        placePiece(x,z,ORANGE);
+        return;
+      }
+
+      heights[x][z]--; stacks[x][z].pop();
+    }
+
+  // random
+  let moves=[];
+  for(let x=0;x<4;x++)
+    for(let z=0;z<4;z++)
+      if(heights[x][z]<4) moves.push([x,z]);
+
+  const [x,z] = moves[Math.floor(Math.random()*moves.length)];
+  placePiece(x,z,ORANGE);
+}
+
+// ---------- Controls ----------
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+const plane = new THREE.Mesh(
+  new THREE.PlaneGeometry(4,4),
+  new THREE.MeshBasicMaterial({visible:false})
+);
+plane.rotation.x = -Math.PI/2;
+plane.position.set(2,0,2);
+scene.add(plane);
+
+let dragging=false, moved=false, lastX, lastY;
+
+window.addEventListener("pointerdown",e=>{
+  dragging=true; moved=false;
+  lastX=e.clientX; lastY=e.clientY;
+});
+
+window.addEventListener("pointermove",e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lastX;
+  const dy=e.clientY-lastY;
+
+  if(Math.abs(dx)>3||Math.abs(dy)>3) moved=true;
+
+  theta+=dx*0.005;
+  phi-=dy*0.005;
+  phi=Math.max(0.1,Math.min(Math.PI-0.1,phi));
+
+  updateCamera();
+  lastX=e.clientX; lastY=e.clientY;
+});
+
+window.addEventListener("pointerup",e=>{
+  if(!moved && !gameOver){
+    mouse.x=(e.clientX/innerWidth)*2-1;
+    mouse.y=-(e.clientY/innerHeight)*2+1;
+    raycaster.setFromCamera(mouse,camera);
+
+    let hit = raycaster.intersectObjects(cubes);
+    let x,z;
+
+    if(hit.length){
+      const p=hit[0].object.position;
+      x=Math.floor(p.x); z=Math.floor(p.z);
+    } else {
+      hit = raycaster.intersectObject(plane);
+      if(!hit.length) return;
+      const p=hit[0].point;
+      x=Math.floor(p.x); z=Math.floor(p.z);
+    }
+
+    if(placePiece(x,z,BLUE)){
+      setTimeout(aiMove,200);
+    }
+  }
+  dragging=false;
+});
+
+// Zoom
+window.addEventListener("wheel",e=>{
+  radius+=e.deltaY*0.01;
+  radius=Math.max(5,Math.min(20,radius));
+  updateCamera();
+});
+
+// ---------- Reset ----------
+document.getElementById("resetBtn").onclick=()=>location.reload();
+
+// ---------- Loop ----------
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene,camera);
+}
+animate();
+
+window.addEventListener("resize",()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+
+</body>
+</html>
